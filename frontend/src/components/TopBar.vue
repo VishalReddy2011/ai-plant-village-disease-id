@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { RouterLink } from 'vue-router'
 import LeafIcon from './icons/LeafIcon.vue'
+import { useLanguageStore } from '@/stores/language'
 
-const cur_lang = ref<[string, string]>(['English', 'EN'])
+const languageStore = useLanguageStore()
+const cur_lang = computed(() => languageStore.currentLanguage)
 const isOpen = ref(false)
 const dropdownRef = ref<HTMLElement | null>(null)
 
@@ -17,11 +19,11 @@ const INDIAN_LANGUAGES: readonly [string, string][] = [
   ['ગુજરાતી', 'GU'],
   ['ਪੰਜਾਬੀ', 'PA'],
   ['മലയാളം', 'ML'],
-  ['ଓଡ଼ିଆ', 'OR'],
+  ['ଓଡ଼िଆ', 'OR'],
 ]
 
 const selectLanguage = (lang: [string, string]) => {
-  cur_lang.value = lang
+  languageStore.setLanguage(lang)
   isOpen.value = false
 }
 
@@ -97,7 +99,7 @@ onBeforeUnmount(() => {
           </button>
 
           <!-- Divider -->
-          <div class="h-[1px] bg-green-950/40 my-1"></div>
+          <div class="h-px bg-green-950/40 my-1"></div>
 
           <!-- Indian languages -->
           <button
