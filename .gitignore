@@ -1,1 +1,36 @@
-/node_modules
+# Node.js dependencies
+/node_modules/
+
+# Python Virtual Environment
+.venv/
+venv/
+ENV/
+
+# Local Environment Variables & DBs
+.env
+*.db
+*.sqlite
+
+# Large Datasets (Auto-downloaded by training script)
+backend/color/
+backend/dataset/
+backend/data/
+
+# Model Checkpoints & Pre-trained weights (Large binaries)
+backend/models/*.pt
+backend/models/*.pth
+*.pt
+*.pth
+
+# Pycache and Compilation Artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# VS Code and OS files
+.vscode/
+.DS_Store
+Thumbs.db
+.ipynb_checkpoints/
