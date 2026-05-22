@@ -2,6 +2,7 @@ import os
 import io
 import uuid
 import logging
+import threading
 from datetime import datetime
 from fastapi import FastAPI, File, UploadFile, HTTPException, Form
 from fastapi.middleware.cors import CORSMiddleware
@@ -84,6 +85,83 @@ advisor = None
 stt_service = None
 tts_service = None
 
+# Threading lock for model loading
+init_lock = threading.Lock()
+
+def download_model_from_drive(file_id: str, dest_path: str):
+    import urllib.request
+    import urllib.parse
+    import re
+    import http.cookiejar
+
+    logger.info(f"Downloading model from Google Drive ID: {file_id} to {dest_path}...")
+    
+    cj = http.cookiejar.CookieJar()
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
+    opener.addheaders = [('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)')]
+    
+    url = f"https://docs.google.com/uc?export=download&id={file_id}"
+    
+    try:
+        # First request
+        with opener.open(url) as response:
+            content = response.read()
+            
+        # Check for confirmation page for large files
+        if b"confirm=" in content:
+            html = content.decode('utf-8', errors='ignore')
+            match = re.search(r'confirm=([a-zA-Z0-9_]+)', html)
+            if not match:
+                match = re.search(r'name="confirm"\s+value="([a-zA-Z0-9_]+)"', html)
+            
+            if match:
+                confirm_token = match.group(1)
+                confirm_url = f"https://docs.google.com/uc?export=download&id={file_id}&confirm={confirm_token}"
+                logger.info(f"Large file warning encountered. Retrying download with confirm token: {confirm_token}...")
+                with opener.open(confirm_url) as response:
+                    content = response.read()
+            else:
+                logger.warning("Could not parse confirm token from Google Drive warning page.")
+                
+        # Save file
+        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+        with open(dest_path, "wb") as f:
+            f.write(content)
+        
+        logger.info(f"Successfully downloaded model to {dest_path}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to download model from Google Drive: {e}")
+        return False
+
+def ensure_classifier_initialized():
+    global classifier, gradcam
+    
+    if classifier is not None and gradcam is not None:
+        return True
+        
+    with init_lock:
+        # Double check after obtaining lock
+        if classifier is not None and gradcam is not None:
+            return True
+            
+        if not os.path.exists(VISION_MODEL_PATH):
+            logger.info(f"Vision model file not found at '{VISION_MODEL_PATH}'. Attempting download...")
+            success = download_model_from_drive("1tXkTBoWx8ykzHCsFyf27MIwtTaEioBqi", VISION_MODEL_PATH)
+            if not success:
+                logger.error("Failed to download model from Google Drive.")
+                return False
+                
+        try:
+            logger.info(f"Loading vision model from {VISION_MODEL_PATH}...")
+            classifier = DiseaseClassifier(VISION_MODEL_PATH)
+            gradcam = GradCAM(classifier)
+            logger.info("Vision model and Grad-CAM layers successfully initialized.")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to load vision model: {e}")
+            return False
+
 @app.on_event("startup")
 async def startup_event():
     """Starts all model resources and does automatic RAG document index validation."""
@@ -91,16 +169,8 @@ async def startup_event():
     
     logger.info("Initializing backend services...")
     
-    # 1. Init Vision Pipeline
-    if os.path.exists(VISION_MODEL_PATH):
-        try:
-            classifier = DiseaseClassifier(VISION_MODEL_PATH)
-            gradcam = GradCAM(classifier)
-            logger.info("Vision model and Grad-CAM layers successfully initialized.")
-        except Exception as e:
-            logger.error(f"Failed to load vision model: {e}")
-    else:
-        logger.warning(f"Vision model file not found at '{VISION_MODEL_PATH}'. Running in mock-only vision mode.")
+    # 1. Init Vision Pipeline (will download if missing)
+    ensure_classifier_initialized()
 
     # 2. Init RAG advisor & Auto Ingestion if store is empty
     if OPENAI_API_KEY:
@@ -165,7 +235,7 @@ async def diagnose(
             }
 
     # 2. Vision prediction (top 3)
-    if classifier is not None:
+    if ensure_classifier_initialized():
         try:
             predictions = classifier.predict_top_3(image_bytes)
             top_prediction = predictions[0]
@@ -199,6 +269,7 @@ async def diagnose(
             logger.error(f"Vision inference execution failed: {e}")
             raise HTTPException(status_code=500, detail=f"Vision model classification failed: {str(e)}")
     else:
+        logger.warning("Classifier initialization failed (model download or loading failed). Falling back to mock vision response.")
         # Mock vision response if no Pt model is present
         mock_preds = [
             {"disease_name_en": "Tomato Early Blight", "confidence": 0.94, "disease_raw": "Tomato___Early_blight"},
