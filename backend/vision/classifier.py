@@ -2,7 +2,7 @@ import io
 import torch
 import torch.nn as nn
 from torchvision import models, transforms
-from PIL import Image
+from PIL import Image, ImageOps
 
 # 38-class labels for PlantVillage dataset
 DISEASE_CLASSES = [
@@ -93,58 +93,67 @@ class DiseaseClassifier:
         
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         
-        # Load the saved state dict and configurations
+        # Load the saved checkpoint directly
         checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
         self.model_name = checkpoint["model_name"]
         self.num_classes = checkpoint["num_classes"]
         self.class_names = checkpoint.get("class_names", DISEASE_CLASSES[:self.num_classes])
-        is_quantized = checkpoint.get("is_quantized", False)
         
-        if isinstance(checkpoint, dict) and "model" in checkpoint:
-            # Direct load path: loads the pre-quantized model object directly to save RAM
-            self.model = checkpoint["model"]
-            self.model.to(self.device)
-            self.model.eval()
-            
-            # Clean up immediately
-            del checkpoint
-            gc.collect()
-        else:
-            # Fallback path: loads state dict, instantiates unquantized structure, and quantizes on the fly
-            state_dict = checkpoint.pop("model_state")
-            del checkpoint
-            gc.collect()
-            
-            # Recreate the model structure
-            model = self._create_empty_model(self.model_name, self.num_classes)
-            
-            if self.model_name == "vit_huggingface" and not is_quantized:
+        # Instantiate a standard, unquantized float32 shell for the model
+        float_model = self._create_empty_model(self.model_name, self.num_classes)
+        
+        # Check if model state dict is present directly (original unquantized weights)
+        if "model_state" in checkpoint:
+            state_dict = checkpoint["model_state"]
+            # If the state dict is in Hugging Face format, map it to torchvision format
+            is_hf = any(k.startswith("vit.") for k in state_dict.keys())
+            if is_hf:
                 state_dict = _map_hf_to_torchvision(state_dict)
-                
-            if is_quantized:
-                # For pre-quantized weights, we must match the quantized graph structure before loading state dict
-                self.model = torch.quantization.quantize_dynamic(
-                    model,
-                    {torch.nn.Linear},
-                    dtype=torch.qint8
-                )
-                # Delete the reference to the unquantized model structure
-                del model
-                gc.collect()
-                
-                self.model.load_state_dict(state_dict)
-            else:
-                # If loaded model is unquantized, load it directly in full precision (float32)
-                model.load_state_dict(state_dict)
-                self.model = model
-
-                
-            self.model.to(self.device)
-            self.model.eval()
+            float_model.load_state_dict(state_dict)
+        elif "model" in checkpoint:
+            # Extract the saved (quantized) model object from the checkpoint
+            q_model = checkpoint["model"]
             
-            # Explicitly clean up state dict and run garbage collection
-            del state_dict
-            gc.collect()
+            # Recursively copy and dequantize weights/biases from q_model to float_model
+            q_modules = dict(q_model.named_modules())
+            f_modules = dict(float_model.named_modules())
+            
+            for name, f_mod in f_modules.items():
+                if name not in q_modules:
+                    continue
+                q_mod = q_modules[name]
+                
+                # If it's a quantized linear module
+                if type(q_mod).__name__ == "Linear" and "quantized" in type(q_mod).__module__:
+                    w_float = q_mod.weight().dequantize()
+                    b_float = q_mod.bias()
+                    
+                    f_mod.weight.data.copy_(w_float)
+                    if b_float is not None:
+                        f_mod.bias.data.copy_(b_float)
+                # If it has standard weight and bias tensors
+                elif hasattr(f_mod, "weight") and hasattr(q_mod, "weight"):
+                    if f_mod.weight is not None and q_mod.weight is not None:
+                        w = q_mod.weight
+                        if isinstance(w, torch.Tensor):
+                            w_data = w.dequantize() if w.is_quantized else w.data
+                            f_mod.weight.data.copy_(w_data)
+                    if hasattr(f_mod, "bias") and hasattr(q_mod, "bias"):
+                        if f_mod.bias is not None and q_mod.bias is not None:
+                            f_mod.bias.data.copy_(q_mod.bias.data)
+        else:
+            raise KeyError("Neither 'model_state' nor 'model' key found in the checkpoint.")
+            
+        self.model = float_model
+        self.model.to(self.device)
+        self.model.eval()
+        
+        # Clean up immediately
+        del checkpoint
+        if "q_model" in locals():
+            del q_model
+        del float_model
+        gc.collect()
 
         # Force glibc to release cached memory back to the OS on Linux (Railway)
         if sys.platform.startswith("linux"):
@@ -171,6 +180,7 @@ class DiseaseClassifier:
     def preprocess(self, image_bytes: bytes) -> torch.Tensor:
         """Preprocesses raw image bytes into a PyTorch batch tensor."""
         image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        image = ImageOps.exif_transpose(image)
         tensor = _TRANSFORM(image)
         return tensor.unsqueeze(0).to(self.device)
 

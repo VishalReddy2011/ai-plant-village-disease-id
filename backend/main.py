@@ -301,13 +301,14 @@ async def diagnose(
             # 3. Compute Grad-CAM for the top predicted class
             # Map top prediction raw label to class index
             top_class_idx = classifier.class_names.index(top_prediction["disease_raw"])
-            overlay_b64, explainable_regions = gradcam.generate_heatmap_overlay(image_bytes, top_class_idx)
+            overlay_b64, heatmap_b64, explainable_regions = gradcam.generate_heatmap_overlay(image_bytes, top_class_idx)
             
             return {
                 "diagnosis_id": diagnosis_id,
                 "is_leaf": True,
                 "top_predictions": predictions,
                 "gradcam_overlay": f"data:image/jpeg;base64,{overlay_b64}",
+                "gradcam_heatmap": f"data:image/jpeg;base64,{heatmap_b64}",
                 "explainable_regions": explainable_regions,
                 "timestamp": datetime.now().isoformat()
             }
@@ -327,6 +328,7 @@ async def diagnose(
             "is_leaf": True,
             "top_predictions": mock_preds,
             "gradcam_overlay": "",
+            "gradcam_heatmap": "",
             "explainable_regions": {
                 "primary_region": "Leaf margin",
                 "feature_detected": "Concentrated necrotic spots",
