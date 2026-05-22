@@ -134,15 +134,10 @@ class DiseaseClassifier:
                 
                 self.model.load_state_dict(state_dict)
             else:
-                # If loaded model is unquantized, load it and then quantize on the fly to save RAM
+                # If loaded model is unquantized, load it directly in full precision (float32)
                 model.load_state_dict(state_dict)
-                self.model = torch.quantization.quantize_dynamic(
-                    model,
-                    {torch.nn.Linear},
-                    dtype=torch.qint8
-                )
-                del model
-                gc.collect()
+                self.model = model
+
                 
             self.model.to(self.device)
             self.model.eval()
