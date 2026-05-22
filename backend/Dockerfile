@@ -12,13 +12,12 @@ ENV UV_LINK_MODE=copy
 
 # Install dependencies first (leverages layer caching)
 COPY uv.lock pyproject.toml ./
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --no-install-project --no-dev
+RUN uv sync --no-install-project --no-dev
 
 # Copy the rest of the project and install it
 COPY . .
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev
+RUN uv sync --frozen --no-dev
+
 
 # --- Runtime Stage ---
 FROM python:3.12-slim AS runtime
