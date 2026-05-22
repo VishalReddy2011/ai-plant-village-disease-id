@@ -268,6 +268,30 @@ def run_comprehensive_test_suite() -> bool:
         traceback.print_exc()
         return False
 
+    # 8. Verify STT & TTS services
+    logger.info("Step 8: Verifying STT and TTS services...")
+    try:
+        stt_service = SpeechToTextService(api_key)
+        tts_service = TextToSpeechService(api_key)
+        
+        # Test TTS synthesis with a small test string
+        test_text = "Hello farmer, this is a test audio report."
+        logger.info("Testing OpenAI TTS synthesis...")
+        audio_data = tts_service.synthesize_speech(test_text, "en")
+        assert len(audio_data) > 0, "TTS synthesis returned empty bytes."
+        logger.info(f"SUCCESS: Synthesized {len(audio_data)} bytes of test speech.")
+        
+        # Test STT transcription interface with a mock tiny wav header
+        logger.info("Testing OpenAI STT transcription structure...")
+        mock_audio = b"RIFF\x24\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00\x11\x2b\x00\x00\x22\x56\x00\x00\x02\x00\x10\x00data\x00\x00\x00\x00"
+        res_text = stt_service.transcribe_audio(mock_audio, "en")
+        logger.info(f"STT structure test returned response: {res_text}")
+        logger.info("SUCCESS: STT & TTS service interfaces verified successfully.")
+    except Exception as e:
+        logger.error(f"FAILURE: STT/TTS service validation failed: {e}")
+        traceback.print_exc()
+        return False
+
     print("=" * 60)
     print("RESULT: ALL INTEGRATION TESTS PASSED SUCCESSFULLY!")
     print("=" * 60)

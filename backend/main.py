@@ -392,6 +392,17 @@ def voice_text_to_speech(
         return StreamingResponse(io.BytesIO(audio_data), media_type="audio/mp3")
     return Response(content=b"", media_type="audio/mp3")
 
+@app.get("/api/v1/voice/tts")
+def voice_text_to_speech_get(
+    text: str,
+    language: str = "en"
+):
+    """Synthesis endpoint via GET request for easy HTML5 Audio integration."""
+    if tts_service is not None:
+        audio_data = tts_service.synthesize_speech(text, language)
+        return StreamingResponse(io.BytesIO(audio_data), media_type="audio/mp3")
+    return Response(content=b"", media_type="audio/mp3")
+
 @app.post("/api/v1/feedback")
 def submit_feedback(req: FeedbackRequest):
     """Records feedback regarding diagnosis accuracy."""
