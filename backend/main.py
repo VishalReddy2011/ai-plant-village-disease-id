@@ -154,8 +154,8 @@ def ensure_classifier_initialized():
             
         if os.path.exists(VISION_MODEL_PATH):
             file_size = os.path.getsize(VISION_MODEL_PATH)
-            if file_size < 300 * 1024 * 1024:
-                logger.info(f"Vision model file exists but size ({file_size} bytes) is less than 300MB. Deleting and redownloading...")
+            if file_size < 50 * 1024 * 1024:
+                logger.info(f"Vision model file exists but size ({file_size} bytes) is less than 50MB. Deleting and redownloading...")
                 try:
                     os.remove(VISION_MODEL_PATH)
                 except Exception as e:

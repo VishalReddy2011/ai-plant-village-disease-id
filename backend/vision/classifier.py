@@ -86,6 +86,10 @@ def _map_hf_to_torchvision(hf_state_dict: dict) -> dict:
 class DiseaseClassifier:
     """Loads a pre-trained PyTorch model (EfficientNet/ViT) and does top-3 inference."""
     def __init__(self, checkpoint_path: str):
+        import gc
+        # Set single-thread CPU mode to minimize RAM overhead
+        torch.set_num_threads(1)
+        
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         
         # Load the saved state dict and configurations
@@ -93,17 +97,39 @@ class DiseaseClassifier:
         self.model_name = checkpoint["model_name"]
         self.num_classes = checkpoint["num_classes"]
         self.class_names = checkpoint.get("class_names", DISEASE_CLASSES[:self.num_classes])
+        is_quantized = checkpoint.get("is_quantized", False)
         
         # Recreate the model structure
         self.model = self._create_empty_model(self.model_name, self.num_classes)
         
         state_dict = checkpoint["model_state"]
-        if self.model_name == "vit_huggingface":
+        if self.model_name == "vit_huggingface" and not is_quantized:
             state_dict = _map_hf_to_torchvision(state_dict)
             
-        self.model.load_state_dict(state_dict)
+        if is_quantized:
+            # For pre-quantized weights, we must match the quantized graph structure before loading state dict
+            self.model = torch.quantization.quantize_dynamic(
+                self.model,
+                {torch.nn.Linear},
+                dtype=torch.qint8
+            )
+            self.model.load_state_dict(state_dict)
+        else:
+            # If loaded model is unquantized, load it and then quantize on the fly to save RAM
+            self.model.load_state_dict(state_dict)
+            self.model = torch.quantization.quantize_dynamic(
+                self.model,
+                {torch.nn.Linear},
+                dtype=torch.qint8
+            )
+            
         self.model.to(self.device)
         self.model.eval()
+        
+        # Explicitly clean up loaded checkpoint objects from memory
+        del checkpoint
+        del state_dict
+        gc.collect()
 
     def _create_empty_model(self, model_name: str, num_classes: int) -> nn.Module:
         """Helper to instantiate the model architecture."""
