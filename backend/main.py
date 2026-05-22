@@ -103,32 +103,39 @@ def download_model_from_drive(file_id: str, dest_path: str):
     url = f"https://docs.google.com/uc?export=download&id={file_id}"
     
     try:
-        # First request
+        # First request to get warning page
         with opener.open(url) as response:
             content = response.read()
             
-        # Check for confirmation page for large files
-        if b"confirm=" in content:
+        # Parse confirmation elements if warning page is returned
+        if b"confirm=" in content or b"download-form" in content:
             html = content.decode('utf-8', errors='ignore')
-            match = re.search(r'confirm=([a-zA-Z0-9_]+)', html)
-            if not match:
-                match = re.search(r'name="confirm"\s+value="([a-zA-Z0-9_]+)"', html)
             
-            if match:
-                confirm_token = match.group(1)
-                confirm_url = f"https://docs.google.com/uc?export=download&id={file_id}&confirm={confirm_token}"
-                logger.info(f"Large file warning encountered. Retrying download with confirm token: {confirm_token}...")
-                with opener.open(confirm_url) as response:
-                    content = response.read()
-            else:
-                logger.warning("Could not parse confirm token from Google Drive warning page.")
+            confirm_match = re.search(r'name="confirm"\s+value="([^"]+)"', html)
+            uuid_match = re.search(r'name="uuid"\s+value="([^"]+)"', html)
+            
+            confirm_val = confirm_match.group(1) if confirm_match else "t"
+            uuid_val = uuid_match.group(1) if uuid_match else ""
+            
+            params = {
+                "id": file_id,
+                "export": "download",
+                "confirm": confirm_val
+            }
+            if uuid_val:
+                params["uuid"] = uuid_val
+                
+            confirm_url = "https://drive.usercontent.google.com/download?" + urllib.parse.urlencode(params)
+            logger.info("Large file warning bypassed. Redirecting to confirmation URL...")
+            with opener.open(confirm_url) as response:
+                content = response.read()
                 
         # Save file
         os.makedirs(os.path.dirname(dest_path), exist_ok=True)
         with open(dest_path, "wb") as f:
             f.write(content)
         
-        logger.info(f"Successfully downloaded model to {dest_path}")
+        logger.info(f"Successfully downloaded model to {dest_path} ({len(content)} bytes)")
         return True
     except Exception as e:
         logger.error(f"Failed to download model from Google Drive: {e}")
@@ -144,6 +151,15 @@ def ensure_classifier_initialized():
         # Double check after obtaining lock
         if classifier is not None and gradcam is not None:
             return True
+            
+        if os.path.exists(VISION_MODEL_PATH):
+            file_size = os.path.getsize(VISION_MODEL_PATH)
+            if file_size < 300 * 1024 * 1024:
+                logger.info(f"Vision model file exists but size ({file_size} bytes) is less than 300MB. Deleting and redownloading...")
+                try:
+                    os.remove(VISION_MODEL_PATH)
+                except Exception as e:
+                    logger.error(f"Failed to remove small/corrupted model file: {e}")
             
         if not os.path.exists(VISION_MODEL_PATH):
             logger.info(f"Vision model file not found at '{VISION_MODEL_PATH}'. Attempting download...")
@@ -213,6 +229,36 @@ class FeedbackRequest(BaseModel):
 def health_check():
     """Simple status check."""
     return {"status": "healthy", "timestamp": datetime.now().isoformat()}
+
+@app.post("/api/v1/test")
+def run_tests_post():
+    """Runs the comprehensive integration test suite and returns stdout and success status."""
+    return execute_test_suite()
+
+@app.get("/api/v1/test")
+def run_tests_get():
+    """Runs the comprehensive integration test suite and returns stdout and success status."""
+    return execute_test_suite()
+
+def execute_test_suite():
+    import io
+    import contextlib
+    import traceback
+    from test_suite import run_comprehensive_test_suite
+    
+    output_capture = io.StringIO()
+    success = False
+    try:
+        with contextlib.redirect_stdout(output_capture), contextlib.redirect_stderr(output_capture):
+            success = run_comprehensive_test_suite()
+    except Exception as e:
+        success = False
+        traceback.print_exc(file=output_capture)
+        
+    return {
+        "success": success,
+        "logs": output_capture.getvalue()
+    }
 
 @app.post("/api/v1/diagnose")
 async def diagnose(

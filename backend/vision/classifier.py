@@ -89,7 +89,7 @@ class DiseaseClassifier:
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         
         # Load the saved state dict and configurations
-        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
         self.model_name = checkpoint["model_name"]
         self.num_classes = checkpoint["num_classes"]
         self.class_names = checkpoint.get("class_names", DISEASE_CLASSES[:self.num_classes])
