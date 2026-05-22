@@ -408,4 +408,6 @@ def submit_feedback(req: FeedbackRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host=API_HOST, port=API_PORT, reload=True)
+    import os
+    reload_enabled = os.getenv("RELOAD", "false").lower() == "true"
+    uvicorn.run("main:app", host=API_HOST, port=API_PORT, reload=reload_enabled)

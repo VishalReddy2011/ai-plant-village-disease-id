@@ -87,6 +87,7 @@ class DiseaseClassifier:
     """Loads a pre-trained PyTorch model (EfficientNet/ViT) and does top-3 inference."""
     def __init__(self, checkpoint_path: str):
         import gc
+        import sys
         # Set single-thread CPU mode to minimize RAM overhead
         torch.set_num_threads(1)
         
@@ -99,37 +100,64 @@ class DiseaseClassifier:
         self.class_names = checkpoint.get("class_names", DISEASE_CLASSES[:self.num_classes])
         is_quantized = checkpoint.get("is_quantized", False)
         
-        # Recreate the model structure
-        self.model = self._create_empty_model(self.model_name, self.num_classes)
-        
-        state_dict = checkpoint["model_state"]
-        if self.model_name == "vit_huggingface" and not is_quantized:
-            state_dict = _map_hf_to_torchvision(state_dict)
+        if isinstance(checkpoint, dict) and "model" in checkpoint:
+            # Direct load path: loads the pre-quantized model object directly to save RAM
+            self.model = checkpoint["model"]
+            self.model.to(self.device)
+            self.model.eval()
             
-        if is_quantized:
-            # For pre-quantized weights, we must match the quantized graph structure before loading state dict
-            self.model = torch.quantization.quantize_dynamic(
-                self.model,
-                {torch.nn.Linear},
-                dtype=torch.qint8
-            )
-            self.model.load_state_dict(state_dict)
+            # Clean up immediately
+            del checkpoint
+            gc.collect()
         else:
-            # If loaded model is unquantized, load it and then quantize on the fly to save RAM
-            self.model.load_state_dict(state_dict)
-            self.model = torch.quantization.quantize_dynamic(
-                self.model,
-                {torch.nn.Linear},
-                dtype=torch.qint8
-            )
+            # Fallback path: loads state dict, instantiates unquantized structure, and quantizes on the fly
+            state_dict = checkpoint.pop("model_state")
+            del checkpoint
+            gc.collect()
             
-        self.model.to(self.device)
-        self.model.eval()
-        
-        # Explicitly clean up loaded checkpoint objects from memory
-        del checkpoint
-        del state_dict
-        gc.collect()
+            # Recreate the model structure
+            model = self._create_empty_model(self.model_name, self.num_classes)
+            
+            if self.model_name == "vit_huggingface" and not is_quantized:
+                state_dict = _map_hf_to_torchvision(state_dict)
+                
+            if is_quantized:
+                # For pre-quantized weights, we must match the quantized graph structure before loading state dict
+                self.model = torch.quantization.quantize_dynamic(
+                    model,
+                    {torch.nn.Linear},
+                    dtype=torch.qint8
+                )
+                # Delete the reference to the unquantized model structure
+                del model
+                gc.collect()
+                
+                self.model.load_state_dict(state_dict)
+            else:
+                # If loaded model is unquantized, load it and then quantize on the fly to save RAM
+                model.load_state_dict(state_dict)
+                self.model = torch.quantization.quantize_dynamic(
+                    model,
+                    {torch.nn.Linear},
+                    dtype=torch.qint8
+                )
+                del model
+                gc.collect()
+                
+            self.model.to(self.device)
+            self.model.eval()
+            
+            # Explicitly clean up state dict and run garbage collection
+            del state_dict
+            gc.collect()
+
+        # Force glibc to release cached memory back to the OS on Linux (Railway)
+        if sys.platform.startswith("linux"):
+            try:
+                import ctypes
+                ctypes.CDLL("libc.so.6").malloc_trim(0)
+            except Exception:
+                pass
 
     def _create_empty_model(self, model_name: str, num_classes: int) -> nn.Module:
         """Helper to instantiate the model architecture."""
